@@ -157,15 +157,21 @@
   }
 
   /* ---------- Print / PDF capture ---------- */
+  .paper.print-mode{width:210mm !important;max-width:none !important;margin:0 !important;box-shadow:none !important;border-radius:0 !important}
   .paper.print-mode .no-print,.paper.print-mode .add-row,.paper.print-mode .del,.paper.print-mode .tax-toggle{display:none !important}
   .paper.print-mode .field,.paper.print-mode .it-field,.paper.print-mode .notes textarea,
   .paper.print-mode .totals input,.paper.print-mode .totals select{border-color:transparent !important;background:transparent !important}
+  /* Let textareas show their full wrapped content in PDF capture — overflow:hidden + fixed min-height
+     was clipping notes/terms to a single line in the generated PDF. */
+  .paper.print-mode textarea{overflow:visible !important;min-height:0 !important}
   /* ===== Modern theme ===== */
   .paper{border-radius:16px;box-shadow:0 60px 130px -55px rgba(8,20,40,.55)}
-  .doc-head{border-bottom:none;padding:24px 40px 16px;position:relative}
+  .doc-head{border-bottom:none;padding:20px 40px 16px;position:relative}
   .doc-head::after{content:"";position:absolute;left:44px;right:44px;bottom:0;height:1px;background:var(--line)}
-  .doc-title{font-size:1.6rem;letter-spacing:.16em;color:var(--royal)}
-  .doc-meta .row label{font-size:.62rem}
+  .doc-title{font-size:1.15rem;letter-spacing:.18em;color:var(--royal);margin:0 0 3px}
+  .doc-title-rule{width:42px;height:2px;margin:0 0 6px auto}
+  .doc-meta .row{margin:2px 0;font-size:.78rem}
+  .doc-meta .row label{font-size:.6rem}
   /* Bill / Project as soft info cards */
   .bill{gap:16px;padding:16px 40px 4px}
   .bill > div{background:var(--soft);border:1px solid var(--line);border-radius:14px;padding:13px 17px}
@@ -331,7 +337,7 @@
     <label><input type="checkbox" id="s_year" style="width:auto;margin-right:6px"/> Include year (e.g. QT-2026-0001)</label>
     <hr style="border:0;border-top:1px solid var(--chrome-line);margin:20px 0"/>
     <p class="sub" style="margin:0 0 4px"><b style="color:var(--txt)">Save to Google Drive &amp; email</b></p>
-    <label>Apps Script web app URL (/exec)</label><input id="s_endpoint" placeholder="https://script.google.com/macros/s/…/exec"/>
+    <label>Apps Script web app URL (/exec) <span style="color:var(--txt-mut);font-weight:400">— set in code, read-only</span></label><input id="s_endpoint" readonly style="opacity:.7;cursor:not-allowed" title="This URL is hard-coded in the HTML and cannot be changed from the UI."/>
     <div style="display:flex;gap:10px;margin-top:18px"><button class="btn primary" id="saveSettings" style="flex:1">Save settings</button></div>
     <hr style="border:0;border-top:1px solid var(--chrome-line);margin:20px 0"/>
     <label>Backup</label>
@@ -363,8 +369,12 @@ function firstEmail(s){const m=(s||'').match(/[\w.+-]+@[\w-]+\.[\w.-]+/);return 
 const setDefaults={name:'SHALOM PRO',tag:'AV Solutions',
   meta:'Edathua, Alleppey, Kerala 689573, India\ninfo@shalomproav.com  ·  +91 94955 83621',
   gstin:'',cur:'₹',sign:'Shalom Pro AV Solutions',
-  qtPre:'QT-',invPre:'INV-',qtNext:1,invNext:1,useYear:false,endpoint:'',showSeal:true};
+  qtPre:'QT-',invPre:'INV-',qtNext:1,invNext:1,useYear:false,endpoint:'https://script.google.com/macros/s/AKfycbyn5kX7nXArZi_G8ajMS8tyGdfIqZ4QZ3ZFvfaQmd57QdM1_7J5KeSjdoTZOBbLpTc4wA/exec',showSeal:true};
 let settings=Object.assign({},setDefaults,load(LS_SET)||{});
+// Endpoint is always taken from the code (setDefaults). This prevents stale localStorage
+// from any previous version of the page from overriding it. To change the URL, edit
+// setDefaults.endpoint above and reload — the Settings UI cannot change this field.
+settings.endpoint=setDefaults.endpoint;
 
 const defaults={type:'quotation',number:'',date:today(),due:plus30(),
   client:{name:'',company:'',address:'',extra:''},project:{name:'',note:''},
@@ -505,7 +515,7 @@ $('saveSettings').onclick=()=>{
   settings.cur=$('s_cur').value||'₹';settings.sign=$('s_sign').value;
   settings.qtPre=$('s_qtpre').value;settings.qtNext=num($('s_qtnext').value)||1;
   settings.invPre=$('s_invpre').value;settings.invNext=num($('s_invnext').value)||1;
-  settings.useYear=$('s_year').checked;settings.endpoint=$('s_endpoint').value.trim();
+  settings.useYear=$('s_year').checked;settings.endpoint=setDefaults.endpoint;
   settings.showSeal=$('s_seal').checked;
   save(LS_SET,settings);applySettings();
   if(!doc.number)doc.number=peekNumber(doc.type);$('docNumber').value=doc.number;calc();toast('Settings saved');
@@ -538,10 +548,48 @@ $('importFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new 
 /* ---- Save to Google Drive + email ---- */
 function blobToB64(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(blob);});}
 async function makePdfBase64(){
-  const el=$('paper');el.classList.add('print-mode');
-  const opt={margin:6,image:{type:'jpeg',quality:.98},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}};
-  try{const blob=await html2pdf().set(opt).from(el).outputPdf('blob');return await blobToB64(blob);}
-  finally{el.classList.remove('print-mode');}
+  const el=$('paper');
+  el.classList.add('print-mode');
+  autoGrowAll();
+
+  // html2canvas can't reliably render multi-line <textarea> content — long notes
+  // and terms capture as a single truncated line. For just the .notes textareas
+  // (Notes and Terms), insert a sibling <div> holding the wrapped text and hide
+  // the textarea during capture, then restore. Other inputs/textareas (BILL TO,
+  // items table) render fine because their content is short / single-line.
+  const swaps=[];
+  el.querySelectorAll('.notes textarea').forEach(ta=>{
+    const cs=window.getComputedStyle(ta);
+    const div=document.createElement('div');
+    div.textContent=ta.value||'';
+    div.style.cssText=
+      'white-space:pre-wrap;word-wrap:break-word;'+
+      'font:'+cs.font+';color:'+cs.color+';line-height:'+cs.lineHeight+';'+
+      'padding:'+cs.padding+';margin:0;'+
+      'width:100%;box-sizing:border-box;min-height:1em';
+    ta.style.display='none';
+    ta.parentNode.insertBefore(div,ta);
+    swaps.push({ta,div});
+  });
+
+  await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+
+  // Page sizing: A4 is 210×297mm. If the rendered content is shorter than 297mm we
+  // shrink the PDF page height to match (so there's no big empty band at the bottom).
+  // If it's longer (many items), we fall back to standard A4 and let html2pdf paginate.
+  // margin:0 — .paper is already 210mm; a non-zero margin here squeezes content.
+  const pxPerMm=96/25.4; // CSS px per mm at standard 96dpi
+  const contentMm=Math.ceil(el.scrollHeight/pxPerMm)+6; // +6mm bottom breathing room
+  const A4_H=297;
+  const format=contentMm<A4_H?[210,contentMm]:'a4';
+  const opt={margin:0,image:{type:'jpeg',quality:.98},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true},jsPDF:{unit:'mm',format:format,orientation:'portrait'}};
+  try{
+    const blob=await html2pdf().set(opt).from(el).outputPdf('blob');
+    return await blobToB64(blob);
+  }finally{
+    el.classList.remove('print-mode');
+    swaps.forEach(({ta,div})=>{ta.style.display='';div.remove();});
+  }
 }
 function buildSendHTML(){
   const css=document.querySelector('style').innerHTML;
@@ -562,10 +610,30 @@ $('driveBtn').onclick=async()=>{
   const btn=$('driveBtn');btn.disabled=true;toast('Generating PDF & sending…');
   try{
     const payload={kind:'document',docType:doc.type,number:doc.number,client:doc.client.name||doc.client.company||'',clientEmail:firstEmail(doc.client.extra),filename:fileName()};
-    if(window.html2pdf){payload.pdf=await makePdfBase64();}else{payload.html=buildSendHTML();}
-    await fetch(settings.endpoint,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
-    toast('Sent to Google Drive & email ✓');
-  }catch(err){toast('Could not send: '+(err.message||err));}
+    if(window.html2pdf){try{const b64=await makePdfBase64();if(b64&&b64.length>100){payload.pdf=b64;}else{throw new Error('empty');}}catch(pdfErr){console.warn('PDF gen failed, using HTML fallback:',pdfErr);payload.html=buildSendHTML();}}else{payload.html=buildSendHTML();}
+    if(!payload.pdf&&!payload.html){throw new Error('Could not generate document content');}
+    const body=JSON.stringify(payload);
+    console.log('Drive save: endpoint=',settings.endpoint);
+    console.log('Drive save: payload size=',body.length,'bytes, has pdf=',!!payload.pdf,'has html=',!!payload.html);
+    let result=null,ok=false;
+    try{
+      const resp=await fetch(settings.endpoint,{method:'POST',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:body});
+      console.log('Drive save: CORS fetch status=',resp.status,'type=',resp.type);
+      const txt=await resp.text();
+      console.log('Drive save: raw response=',txt);
+      try{result=JSON.parse(txt);}catch(pe){result=null;}
+      ok=!!(result&&result.ok);
+    }catch(corsErr){
+      console.warn('Drive save: CORS blocked, retrying no-cors:',corsErr.message);
+      await fetch(settings.endpoint,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:body});
+      ok=true;result={ok:true,blind:true};
+    }
+    console.log('Drive save: result=',result,'ok=',ok);
+    if(result&&result.error)throw new Error(result.error);
+    if(ok&&result.blind){toast('Sent to Google Drive & email (check your Drive)');}
+    else if(ok){toast('Saved to Google Drive & emailed ✓');}
+    else{throw new Error('Server did not confirm save');}
+  }catch(err){console.error('Drive save FAILED:',err);toast('Could not send: '+(err.message||err));}
   finally{btn.disabled=false;}
 };
 
