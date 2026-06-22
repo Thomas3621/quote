@@ -574,15 +574,14 @@ async function makePdfBase64(){
 
   await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
 
-  // Page sizing: A4 is 210×297mm. If the rendered content is shorter than 297mm we
-  // shrink the PDF page height to match (so there's no big empty band at the bottom).
-  // If it's longer (many items), we fall back to standard A4 and let html2pdf paginate.
-  // margin:0 — .paper is already 210mm; a non-zero margin here squeezes content.
-  const pxPerMm=96/25.4; // CSS px per mm at standard 96dpi
-  const contentMm=Math.ceil(el.scrollHeight/pxPerMm)+6; // +6mm bottom breathing room
-  const A4_H=297;
-  const format=contentMm<A4_H?[210,contentMm]:'a4';
-  const opt={margin:0,image:{type:'jpeg',quality:.98},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true},jsPDF:{unit:'mm',format:format,orientation:'portrait'}};
+  // Standard A4 (210×297mm). A custom page size matching content height makes
+  // viewers auto-scale to fit window, which makes everything look zoomed in.
+  // With standard A4 the content renders at its natural size; if it's shorter
+  // than the page, the bottom just has whitespace (normal invoice behaviour).
+  // margin:15 — leaves a 15mm border on all sides; html2pdf scales the captured
+  // 210mm-wide canvas down into the (210-30)=180mm printable area, which is the
+  // "zoom out" effect.
+  const opt={margin:15,image:{type:'jpeg',quality:.98},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['avoid-all']}};
   try{
     const blob=await html2pdf().set(opt).from(el).outputPdf('blob');
     return await blobToB64(blob);
