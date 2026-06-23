@@ -196,8 +196,7 @@
   .totals .tr.muted{color:var(--ink2)}
   .tax-toggle{background:transparent;border-bottom:1px solid var(--line);padding:6px 6px}
   .in-words{background:transparent;border:none;padding:8px 6px;color:var(--muted)}
-  .totals .tr.grand{border-radius:14px;margin-top:9px;padding:13px 18px;font-size:1.12rem;
-    box-shadow:0 18px 30px -18px rgba(10,95,176,.6)}
+  .totals .tr.grand{border-radius:14px;margin-top:9px;padding:13px 18px;font-size:1.12rem}
   /* Signature */
   .sign{padding:14px 40px 24px}
   /* Header/bill alike padding sync */
@@ -365,12 +364,36 @@ function load(k){try{return JSON.parse(localStorage.getItem(k));}catch(e){return
 function save(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){return false;}}
 function fmtDate(s){if(!s)return'';const d=new Date(s+'T00:00:00');return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}
 function firstEmail(s){const m=(s||'').match(/[\w.+-]+@[\w-]+\.[\w.-]+/);return m?m[0]:'';}
+function contactIcon(type){
+  const paths={
+    location:'<path d="M12 21s7-4.4 7-11a7 7 0 0 0-14 0c0 6.6 7 11 7 11z"/><circle cx="12" cy="10" r="2.3"/>',
+    email:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M4 7l8 6 8-6"/>',
+    mobile:'<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>'
+  };
+  return '<svg aria-hidden="true" viewBox="0 0 24 24" style="width:12px;height:12px;vertical-align:-1.5px;margin-right:5px;color:var(--royal);stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round">'+(paths[type]||'')+'</svg>';
+}
+function contactIconType(s){
+  if(/@/.test(s))return 'email';
+  if(/^\+?\d[\d\s().-]{6,}$/.test(String(s||'').trim()))return 'mobile';
+  return 'location';
+}
+function withContactIcon(s){return String(s||'').trim()?contactIcon(contactIconType(s))+s:s;}
+function formatCompanyMeta(s){
+  const parts=String(s||'').split(/\n|\s*·\s*/).map(part=>part.trim()).filter(Boolean);
+  const email=parts.find(part=>/@/.test(part))||'';
+  const mobile=parts.find(part=>part!==email && /^\+?\d[\d\s().-]{6,}$/.test(part))||'';
+  const location=parts.find(part=>part!==email && part!==mobile)||'';
+  const ordered=[email,mobile,location].filter(Boolean);
+  const rest=parts.filter(part=>!ordered.includes(part));
+  return ordered.concat(rest).map(withContactIcon).join('<br/>');
+}
 
 const setDefaults={name:'SHALOM PRO',tag:'AV Solutions',
-  meta:'Edathua, Alleppey, Kerala 689573, India\ninfo@shalomproav.com  ·  +91 94955 83621',
+  meta:'info@shalomproav.com\n+91 94955 83621\nEdathua, Alleppey, Kerala 689573, India',
   gstin:'',cur:'₹',sign:'Shalom Pro AV Solutions',
   qtPre:'QT-',invPre:'INV-',qtNext:1,invNext:1,useYear:false,endpoint:'https://script.google.com/macros/s/AKfycbyn5kX7nXArZi_G8ajMS8tyGdfIqZ4QZ3ZFvfaQmd57QdM1_7J5KeSjdoTZOBbLpTc4wA/exec',showSeal:true};
 let settings=Object.assign({},setDefaults,load(LS_SET)||{});
+if((settings.meta||'')==='Edathua, Alleppey, Kerala 689573, India\ninfo@shalomproav.com  ·  +91 94955 83621')settings.meta=setDefaults.meta;
 // Endpoint is always taken from the code (setDefaults). This prevents stale localStorage
 // from any previous version of the page from overriding it. To change the URL, edit
 // setDefaults.endpoint above and reload — the Settings UI cannot change this field.
@@ -406,7 +429,7 @@ function applySettings(){
   CUR=settings.cur||'₹';
   if($('coName'))$('coName').innerHTML=(settings.name||'SHALOM PRO').replace(/PRO/i,'<b>PRO</b>');
   if($('coTag'))$('coTag').textContent=settings.tag||'';
-  let meta=(settings.meta||'').replace(/\n/g,'<br/>');
+  let meta=formatCompanyMeta(settings.meta||'');
   if(settings.gstin) meta+='<br/>GSTIN: '+settings.gstin;
   $('coMeta').innerHTML=meta;
   $('signFor').textContent=settings.sign||'Shalom Pro AV Solutions';
@@ -574,16 +597,27 @@ async function makePdfBase64(){
 
   await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
 
-  // Standard A4 (210×297mm). A custom page size matching content height makes
-  // viewers auto-scale to fit window, which makes everything look zoomed in.
-  // With standard A4 the content renders at its natural size; if it's shorter
-  // than the page, the bottom just has whitespace (normal invoice behaviour).
-  // margin:15 — leaves a 15mm border on all sides; html2pdf scales the captured
-  // 210mm-wide canvas down into the (210-30)=180mm printable area, which is the
-  // "zoom out" effect.
-  const opt={margin:15,image:{type:'jpeg',quality:.98},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['avoid-all']}};
+  // We bypass html2pdf().set({margin}) here because its margin option doesn't
+  // scale the captured canvas — it just offsets it, causing the right edge to
+  // clip off the page. Instead we drive html2canvas + jsPDF directly (both are
+  // shipped inside the html2pdf.bundle and are reachable on window) and call
+  // addImage with explicit width/height that fit the printable area. That gives
+  // a true proportional zoom-out controlled by MARGIN_MM.
+  const MARGIN_MM=15;   // border on all sides; bigger = more zoomed-out
+  const PAGE_W=210, PAGE_H=297;
   try{
-    const blob=await html2pdf().set(opt).from(el).outputPdf('blob');
+    const canvas=await window.html2canvas(el,{scale:2,backgroundColor:'#ffffff',useCORS:true});
+    const imgData=canvas.toDataURL('image/jpeg',0.98);
+    const JSPDF=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+    const pdf=new JSPDF({unit:'mm',format:'a4',orientation:'portrait'});
+    // Fit canvas into printable area, preserving aspect ratio.
+    const maxW=PAGE_W-2*MARGIN_MM, maxH=PAGE_H-2*MARGIN_MM;
+    const ratio=canvas.height/canvas.width;
+    let w=maxW, h=maxW*ratio;
+    if(h>maxH){ h=maxH; w=maxH/ratio; }  // fit-by-height if too tall
+    const x=(PAGE_W-w)/2, y=MARGIN_MM;
+    pdf.addImage(imgData,'JPEG',x,y,w,h);
+    const blob=pdf.output('blob');
     return await blobToB64(blob);
   }finally{
     el.classList.remove('print-mode');
